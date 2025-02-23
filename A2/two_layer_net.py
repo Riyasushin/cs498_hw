@@ -146,8 +146,9 @@ def nn_forward_pass(params: Dict[str, torch.Tensor], X: torch.Tensor):
     # Store the result in the scores variable, which should be an tensor of    #
     # shape (N, C).                                                            #
     ############################################################################
-    # Replace "pass" statement with your code
-    pass
+    
+    hidden = (X.matmul(W1) + b1).clamp(min=0) # (N, H), relu:max(x, 0)
+    scores = hidden.matmul(W2) + b2
     ###########################################################################
     #                             END OF YOUR CODE                            #
     ###########################################################################
@@ -211,8 +212,16 @@ def nn_forward_backward(
     # If you are not careful here, it is easy to run into numeric instability  #
     # (Check Numeric Stability in http://cs231n.github.io/linear-classify/).   #
     ############################################################################
-    # Replace "pass" statement with your code
-    pass
+    max_scores = torch.max(scores, dim=1, keepdim=True).values #没有.values会导致得到元组而不是张量，现在明确提取数值部分 
+    exp_scores = torch.exp(scores - max_scores)
+    
+    probs = exp_scores / torch.sum(exp_scores, dim=1, keepdim=True) # 别忘了keeepdim
+    
+    correct_loss = -torch.log(probs[torch.arange(N), y]) # 这里不太清楚，数学！
+    
+    loss = torch.sum(correct_loss) / N
+    loss += reg * torch.sum(W1 * W1) + reg * torch.sum(W2 * W2)
+
     ###########################################################################
     #                             END OF YOUR CODE                            #
     ###########################################################################
@@ -225,8 +234,20 @@ def nn_forward_backward(
     # For example, grads['W1'] should store the gradient on W1, and be a      #
     # tensor of same size                                                     #
     ###########################################################################
-    # Replace "pass" statement with your code
-    pass
+    
+    # input -> hidden -> scores
+    #    W1+ReLU        W2  
+    dscores = probs.clone() # (N, D)
+    dscores[torch.arange(N), y] -= 1
+    dscores /= N # !!归一化
+    grads['W2'] = torch.matmul(h1.t(), dscores) + 2 * reg * W2 # .t() !!!
+    grads['b2'] = torch.sum(dscores, dim=0)
+
+    dhidden = torch.matmul(dscores,W2.t())
+    dhidden[h1 <= 0] = 0 # ReLU gradient (mask where h1 <=0)
+    grads['W1'] = torch.matmul(X.t(), dhidden) + 2 * reg * W1
+    grads['b1'] = torch.sum(dhidden, dim=0)
+
     ###########################################################################
     #                             END OF YOUR CODE                            #
     ###########################################################################
@@ -306,8 +327,10 @@ def nn_train(
         # using stochastic gradient descent. You'll need to use the gradients   #
         # stored in the grads dictionary defined above.                         #
         #########################################################################
-        # Replace "pass" statement with your code
-        pass
+        
+        for param_name in params:
+            params[param_name] -= learning_rate * grads[param_name]
+        
         #########################################################################
         #                             END OF YOUR CODE                          #
         #########################################################################
@@ -325,7 +348,7 @@ def nn_train(
             train_acc_history.append(train_acc)
             val_acc_history.append(val_acc)
 
-            # Decay learning rate
+            # Decay learning rate !!!
             learning_rate *= learning_rate_decay
 
     return {
@@ -364,15 +387,22 @@ def nn_predict(
     ###########################################################################
     # TODO: Implement this function; it should be VERY simple!                #
     ###########################################################################
-    # Replace "pass" statement with your code
-    pass
+    
+    # 前向传播计算分类得分
+    # 第一层: X (N,D) @ W1 (D,H) + b1 (H,) → (N,H)，经过ReLU激活
+    hidden = (X.mm(params["W1"]) + params["b1"]).clamp(min=0)
+    # 第二层: hidden (N,H) @ W2 (H,C) + b2 (C,) → 得分矩阵 (N,C)
+    scores = hidden.mm(params["W2"]) + params["b2"]
+    # 取每行最大值的索引作为预测类别
+    y_pred = torch.argmax(scores, dim=1)
+
     ###########################################################################
     #                              END OF YOUR CODE                           #
     ###########################################################################
 
     return y_pred
 
-
+import numpy as np
 def nn_get_search_params():
     """
     Return candidate hyperparameters for a TwoLayerNet model.
@@ -398,8 +428,14 @@ def nn_get_search_params():
     # different hyperparameters to achieve good performance with the softmax  #
     # classifier.                                                             #
     ###########################################################################
-    # Replace "pass" statement with your code
-    pass
+    
+    learning_rates = np.linspace(1e-2, 1e1, num=15)
+    # regularization_strengths = np.linspace(1e-7, 1e-1, num=20)
+    # hidden_sizes = [96, 64, 32]
+    learning_rate_decays = [0.95]
+    regularization_strengths = [0.01]
+    hidden_sizes = [96, 64, 32]
+    learning_rates = [0.1]
     ###########################################################################
     #                           END OF YOUR CODE                              #
     ###########################################################################
@@ -459,10 +495,40 @@ def find_best_net(
     # to write code to sweep through possible combinations of hyperparameters   #
     # automatically like we did on the previous exercises.                      #
     #############################################################################
-    # Replace "pass" statement with your code
-    pass
+    
+    learning_rates, hidden_sizes, regularization_strengths, learning_rate_decays = get_param_set_fn()
+    # 网格搜索超参数组合
+    for lr in learning_rates:
+        for hs in hidden_sizes:
+            for reg in regularization_strengths:
+                for decay in learning_rate_decays:
+                    # 初始化网络
+                    net = TwoLayerNet(3 * 32 * 32, hs, 10, device=data_dict['X_train'].device, dtype=data_dict['X_train'].dtype)
+                    
+                    # 训练模型 (固定num_iters=2000, batch_size=200)
+                    stats = net.train(
+                        data_dict['X_train'], 
+                        data_dict['y_train'], 
+                        data_dict['X_val'], 
+                        data_dict['y_val'],
+                        num_iters=3000, 
+                        batch_size=1000,
+                        learning_rate=lr,
+                        learning_rate_decay=decay,
+                        reg=reg,
+                        verbose=False
+                    )
+ 
+                    # 取最终验证准确率
+                    current_val_acc = stats['val_acc_history'][-1] # [-1]
+                    print(f'training: lr:{lr} hs:{hs} reg:{reg} decay:{decay} acc{current_val_acc}')
+                    # 更新最佳结果
+                    if current_val_acc > best_val_acc:
+                        best_val_acc = current_val_acc
+                        best_net = net
+                        best_stat = stats
     #############################################################################
     #                               END OF YOUR CODE                            #
     #############################################################################
-
+    print(f'best: {best_val_acc}')
     return best_net, best_stat, best_val_acc
