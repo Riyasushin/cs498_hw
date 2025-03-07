@@ -715,8 +715,16 @@ def adam(w, dw, config=None):
     # NOTE: In order to match the reference output, please modify t _before_ #
     # using it in any calculations.                                          #
     ##########################################################################
-    # Replace "pass" statement with your code
-    pass
+    
+    config['t'] += 1
+    config['m'] = config['beta1'] * config['m'] + (1 - config['beta1']) * dw
+    config['v'] = config['beta2'] * config['v'] + (1 - config['beta2']) * (dw ** 2)
+
+    m_hat = config['m'] / (1 - config['beta1'] ** config['t'])
+    v_hat = config['v'] / (1 - config['beta2'] ** config['t'])
+
+    next_w = w - config['learning_rate'] * m_hat / (torch.sqrt(v_hat) + config['epsilon'])
+
     #########################################################################
     #                              END OF YOUR CODE                         #
     #########################################################################
@@ -768,8 +776,10 @@ class Dropout(object):
             # inverted dropout.                                          #
             # Store the dropout mask in the mask variable.               #
             ##############################################################
-            # Replace "pass" statement with your code
-            pass
+            
+            mask = (torch.rand_like(x) > p).double()
+            out = x * mask / (1 - p)
+
             ##############################################################
             #                   END OF YOUR CODE                         #
             ##############################################################
@@ -778,8 +788,8 @@ class Dropout(object):
             # TODO: Implement the test phase forward pass for            #
             # inverted dropout.                                          #
             ##############################################################
-            # Replace "pass" statement with your code
-            pass
+            
+            out = x
             ##############################################################
             #                      END OF YOUR CODE                      #
             ##############################################################
@@ -805,8 +815,8 @@ class Dropout(object):
             # TODO: Implement training phase backward pass for        #
             # inverted dropout                                        #
             ###########################################################
-            # Replace "pass" statement with your code
-            pass
+            
+            dx = dout * mask / (1 - dropout_param['p'])
             ###########################################################
             #                     END OF YOUR CODE                    #
             ###########################################################
