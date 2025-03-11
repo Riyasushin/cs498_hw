@@ -312,8 +312,21 @@ class ThreeLayerConvNet(object):
         # **the width and height of the input are preserved**. Take a        #
         # look at the start of the loss() function to see how that happens.  #
         ######################################################################
-        # Replace "pass" statement with your code
-        pass
+        
+        C, H, W = input_dims
+
+        self.params['W1'] = torch.randn(num_filters, C, filter_size, filter_size,
+                                       dtype=dtype, device=device) * weight_scale
+        self.params['b1'] = torch.zeros(num_filters, dtype=dtype, device=device)
+
+        linear_input_dim = num_filters * (H // 2) * (W // 2)
+        self.params['W2'] = torch.randn(linear_input_dim, hidden_dim,
+                                       dtype=dtype, device=device) * weight_scale
+        self.params['b2'] = torch.zeros(hidden_dim, dtype=dtype, device=device)
+
+        self.params['W3'] = torch.randn(hidden_dim, num_classes,
+                                       dtype=dtype, device=device) * weight_scale
+        self.params['b3'] = torch.zeros(num_classes, dtype=dtype, device=device)
         ######################################################################
         #                            END OF YOUR CODE                        #
         ######################################################################
@@ -361,8 +374,14 @@ class ThreeLayerConvNet(object):
         # Remember you can use functions defined in your implementation      #
         # above                                                              #
         ######################################################################
-        # Replace "pass" statement with your code
-        pass
+        '''
+        conv - relu - 2x2 max pool - linear - relu - linear - softmax
+        '''
+        out_ConvReLU, cache_ConvReLU  = Conv_ReLU_Pool.forward(X, W1, b1, conv_param, pool_param)
+        out_Linear_ReLU, cache_Linear_ReLU = Linear_ReLU.forward(out_ConvReLU, W2, b2)
+        scores, cache_Linear = Linear.forward(out_Linear_ReLU, W3, b3)
+
+        
         ######################################################################
         #                             END OF YOUR CODE                       #
         ######################################################################
@@ -382,8 +401,14 @@ class ThreeLayerConvNet(object):
         # pass the automated tests, make sure that your L2 regularization  #
         # does not include a factor of 0.5                                 #
         ####################################################################
-        # Replace "pass" statement with your code
-        pass
+        
+        loss, dscores = softmax_loss(scores, y)
+        d_Linear_ReLU, grads['W3'], grads['b3'] = Linear.backward(dscores, cache_Linear)
+        d_ConvReLU, grads['W2'], grads['b2'] = Linear_ReLU.backward(d_Linear_ReLU, cache_Linear_ReLU)
+        _, grads['W1'], grads['b1'] = Conv_ReLU_Pool.backward(d_ConvReLU, cache_ConvReLU)
+
+        reg_loss = self.reg * ((W1 ** 2).sum() + (W2 ** 2).sum() + (W3 ** 2).sum())
+        loss += reg_loss
         ###################################################################
         #                             END OF YOUR CODE                    #
         ###################################################################
@@ -466,8 +491,38 @@ class DeepConvNet(object):
         # Batchnorm scale (gamma) and shift (beta) parameters should be     #
         # initilized to ones and zeros respectively.                        #
         #####################################################################
-        # Replace "pass" statement with your code
-        pass
+        '''
+        {conv - [batchnorm?] - relu - [pool?]} x (L - 1) - linear
+        use kernel size 3 and
+        padding 1 to preserve the feature map size, and all pooling layers will be
+        max pooling layers with 2x2 receptive fields and a stride of 2 to halve the
+        size of the feature map.
+
+        F, _, HH, WW = w.shape
+
+        N, C, H, W = x.shape
+
+        卷积层的输出尺寸公式是：((输入尺寸 - 卷积核大小 + 2*填充) / 步幅) + 1
+        '''
+        C, H, W = input_dims
+        filter_size = 3
+        prev_channels = C
+        linear_input_dim = None
+        for i, F in enumerate(num_filters):
+            self.params[f'W{i + 1}'] = torch.randn((F, prev_channels, 3, 3),
+                                               dtype=self.dtype, device=device) * weight_scale
+            self.params[f'b{i + 1}'] = torch.zeros(F, dtype=dtype, device=device)
+
+            if batchnorm:
+                self.params[f'gamma{i + 1}'] = torch.ones(F, device=device, dtype=dtype)
+                self.params[f'beta{i + 1}'] = torch.zeros(F, device=device, dtype=dtype)
+  
+            prev_channels = F
+        
+        linear_input_dim = prev_channels * (H // (2 ** len(max_pools))) * (W // (2 ** len(max_pools)))
+        self.params[f'W{self.num_layers}'] = torch.randn(linear_input_dim, num_classes, dtype=dtype, device=device) * weight_scale
+        self.params[f'b{self.num_layers}'] = torch.zeros(num_classes, dtype=dtype, device=device)
+
         ################################################################
         #                      END OF YOUR CODE                        #
         ################################################################
@@ -573,8 +628,36 @@ class DeepConvNet(object):
         # max pooling layers, or the convolutional sandwich     #
         # layers, to simplify your implementation.              #
         #########################################################
-        # Replace "pass" statement with your code
-        pass
+        '''
+        {conv - [batchnorm?] - relu - [pool?]} x (L - 1) - linear
+        '''
+        out_macros = {}
+        caches = {}
+        inputs = X
+        for i in range(self.num_layers - 1):
+            tmp_out, tmp_cache = None, None
+            W = self.params[f'W{i + 1}']
+            b = self.params[f'b{i + 1}']
+            if self.batchnorm:
+                gamma = self.params[f'gamma{i + 1}']
+                beta = self.params[f'beta{i + 1}']
+            if self.batchnorm:
+                if i in self.max_pools:
+                    tmp_out, tmp_cache = Conv_BatchNorm_ReLU_Pool.forward(inputs, W, b, gamma=gamma, beta=beta, conv_param=conv_param, bn_param=self.bn_params[i], pool_param=pool_param) 
+                else: 
+                    tmp_out, tmp_cache = Conv_BatchNorm_ReLU.forward(inputs, W, b, gamma=gamma, beta=beta, conv_param=conv_param, bn_param=self.bn_params[i])
+            else:
+                if i in self.max_pools:
+                    tmp_out, tmp_cache = Conv_ReLU_Pool.forward(inputs, W, b, conv_param=conv_param, pool_param=pool_param)
+                else:
+                    tmp_out, tmp_cache = Conv_ReLU.forward(inputs, W, b, conv_param=conv_param)
+            inputs = tmp_out
+            out_macros[f'{i + 1}'] = tmp_out
+            caches[f'{i + 1}'] = tmp_cache
+        W = self.params[f'W{self.num_layers}']
+        b = self.params[f'b{self.num_layers}']
+        scores, cacha_linear = Linear.forward(inputs, W, b)
+
         #####################################################
         #                 END OF YOUR CODE                  #
         #####################################################
@@ -594,8 +677,30 @@ class DeepConvNet(object):
         # pass the automated tests, make sure that your L2 regularization #
         # does not include a factor of 0.5                                #
         ###################################################################
-        # Replace "pass" statement with your code
-        pass
+        loss, dscores = softmax_loss(scores, y)
+        d_linear, grads[f'W{self.num_layers}'], grads[f'b{self.num_layers}'] = Linear.backward(dscores, cacha_linear)
+        last_de = d_linear
+        for i in range(self.num_layers - 1, 0, -1):
+            if self.batchnorm:
+                if (i - 1) in self.max_pools:
+                    dd, grads[f'W{i}'], grads[f'b{i}'], grads[f'gamma{i}'], grads[f'beta{i}'] = Conv_BatchNorm_ReLU_Pool.backward(last_de, caches[f'{i}'])
+                else:
+                    dd, grads[f'W{i}'], grads[f'b{i}'], grads[f'gamma{i}'], grads[f'beta{i}'] = Conv_BatchNorm_ReLU.backward(last_de, caches[f'{i}'])
+            else:
+                if (i - 1) in self.max_pools:
+                    dd, grads[f'W{i}'], grads[f'b{i}'] = Conv_ReLU_Pool.backward(last_de, caches[f'{i}'])
+                else:
+                    dd, grads[f'W{i}'], grads[f'b{i}'] = Conv_ReLU.backward(last_de, caches[f'{i}'])
+            last_de = dd
+        for i in range(self.num_layers, 0, -1):
+            grads[f'W{i}'] += 2 * self.reg * self.params[f'W{i}']
+            if self.batchnorm:
+                grads[f'gamma{i}'] += 2 * self.reg * self.params[f'gamma{i}']
+                grads[f'beta{i}'] += 2 * self.reg * self.params[f'beta{i}']
+                
+        
+        loss += self.reg * sum([ ((self.params[f'W{i}']) ** 2).sum() for i in range(self.num_layers, 0, -1) ])
+
         #############################################################
         #                       END OF YOUR CODE                    #
         #############################################################
